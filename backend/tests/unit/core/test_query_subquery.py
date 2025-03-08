@@ -10,7 +10,7 @@ async def test_build_subquery_filter_attribute_text(
 ):
     attr_schema = all_attribute_types_schema.get_attribute(name="mystring")
 
-    query, params, result_name = await build_subquery_filter(
+    query, params, result_name, _ = await build_subquery_filter(
         db=db,
         field=attr_schema,
         name="name",
@@ -48,7 +48,7 @@ async def test_build_subquery_filter_attribute_int(
 ):
     attr_schema = all_attribute_types_schema.get_attribute(name="myint")
 
-    query, params, result_name = await build_subquery_filter(
+    query, params, result_name, _ = await build_subquery_filter(
         db=db,
         field=attr_schema,
         name="name",
@@ -85,7 +85,7 @@ async def test_build_subquery_filter_relationship(db: InfrahubDatabase, default_
     car_schema = registry.schema.get(name="TestCar")
     rel_schema = car_schema.get_relationship(name="owner")
 
-    query, params, result_name = await build_subquery_filter(
+    query, params, result_name, _ = await build_subquery_filter(
         db=db,
         field=rel_schema,
         name="owner",
@@ -127,7 +127,7 @@ async def test_build_subquery_filter_relationship_ids(db: InfrahubDatabase, defa
     car_schema = registry.schema.get(name="TestCar")
     rel_schema = car_schema.get_relationship(name="owner")
 
-    query, params, result_name = await build_subquery_filter(
+    query, params, result_name, _ = await build_subquery_filter(
         db=db,
         field=rel_schema,
         name="owner",
@@ -165,7 +165,7 @@ async def test_build_subquery_order_relationship(db: InfrahubDatabase, default_b
     car_schema = registry.schema.get(name="TestCar")
     rel_schema = car_schema.get_relationship(name="owner")
 
-    query, params, result_name = await build_subquery_order(
+    query, params, result_name, _ = await build_subquery_order(
         db=db,
         field=rel_schema,
         name="owner",
@@ -196,7 +196,7 @@ async def test_build_subquery_filter_attribute_multiple_values(
 ):
     attr_schema = all_attribute_types_schema.get_attribute(name="mystring")
 
-    query, params, result_name = await build_subquery_filter(
+    query, params, result_name, _ = await build_subquery_filter(
         db=db,
         field=attr_schema,
         name="name",
@@ -235,7 +235,7 @@ async def test_build_subquery_filter_relationship_multiple_values(
     car_schema = registry.schema.get(name="TestCar")
     rel_schema = car_schema.get_relationship(name="owner")
 
-    query, params, result_name = await build_subquery_filter(
+    query, params, result_name, _ = await build_subquery_filter(
         db=db,
         field=rel_schema,
         name="owner",

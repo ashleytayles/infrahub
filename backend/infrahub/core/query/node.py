@@ -1028,11 +1028,13 @@ class NodeGetListQuery(Query):
         filter_query: list[str] = []
         filter_params: dict[str, Any] = {}
 
+        first_filter = True
+
         for far in field_attribute_requirements:
             extra_tail_properties = {far.node_value_query_variable: "value"}
             if far.supports_profile:
                 extra_tail_properties[far.is_default_query_variable] = "is_default"
-            subquery, subquery_params, subquery_result_name = await build_subquery_filter(
+            subquery, subquery_params, subquery_result_name, partial_query = await build_subquery_filter(
                 db=db,
                 field=far.field,
                 name=far.field_name,
@@ -1053,6 +1055,11 @@ class NodeGetListQuery(Query):
                     for label in self._get_tracked_variables()
                 ]
             )
+
+            if first_filter:
+                self.add_to_query(partial_query)
+                self.add_to_query("WITH DISTINCT n, rb")
+                first_filter = False
 
             filter_params.update(subquery_params)
             filter_query.append("CALL {")

@@ -97,7 +97,13 @@ async def build_subquery_filter(
     WITH latest_node_details[1] AS {node_alias}{final_with_extra}
     RETURN {to_return}
     """
-    return query, params, prefix
+
+    partial_query = f"""
+    {match} path = {filter_str}
+    WHERE {where_str}
+    """
+
+    return query, params, prefix, partial_query
 
 
 async def build_subquery_order(
