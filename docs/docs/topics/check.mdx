@@ -1,28 +1,108 @@
 ---
-title: Check
+title: Understanding Checks
 ---
 
-Checks are user defined logic, stored in an [external repository linked to Infrahub](../topics/repository), that are run as part of a [proposed change](../topics/proposed-change). It allows a user to perform any kind of data validation logic during a proposed change. If a check does not complete successfully, then the proposed change cannot be merged.
+## Introduction
 
-Some examples:
+Checks in Infrahub are powerful validation mechanisms that ensure your infrastructure data meets specific requirements before changes can be committed. They act as automated gatekeepers that verify data integrity, enforce organizational standards, and prevent configuration errors from propagating through your infrastructure.
 
-- name validation against a naming convention for all infrastructure components in the database
-- validate that we always have a redundant WAN circuit in operational state for every site
-- validate that all internet facing interfaces have an inbound access-list associated
+This document explains what checks are, how they work within Infrahub's ecosystem, and the different ways they can be implemented to safeguard your infrastructure data.
 
-## High level design
+## Concepts & Definitions
 
-A check is composed of 2 main components:
+Checks are user-defined validation logic that:
 
-- A GraphQL Query that will define the input data
-- A check logic in the Python language that will validate the data
+- Are stored in [external repositories linked to Infrahub](../topics/repository)
+- Run automatically during [proposed changes](../topics/proposed-change)
+- Block changes from being merged if validation fails
+- Allow for complex, custom business logic to be enforced
+
+A check is essentially a programmatic quality assurance mechanism that examines infrastructure data and confirms it meets your organization's requirements before allowing changes to be committed to your main branch.
+
+## Background & Context
+
+Infrastructure data validation has traditionally been challenging due to:
+
+- Diverse data formats and systems
+- Lack of centralized validation frameworks
+- Difficulty ensuring consistency across teams and tools
+- Limited ability to enforce organizational standards
+
+Infrahub's check system addresses these challenges by providing a unified approach to data validation that integrates directly into the infrastructure change workflow.
+
+## Architecture & Design
+
+A check consists of two primary components working together:
+
+1. **GraphQL Query**: Defines and retrieves the specific data to be validated
+2. **Python Logic**: Contains the actual validation code that processes the retrieved data
+
+This separation allows for flexible, powerful checks that can validate complex relationships and conditions within your infrastructure data.
 
 ![High level design](../media/topics/checks.excalidraw.svg)
 
-## Targeted checks
+The check execution process follows these steps:
 
-Targeted checks are exactly the same as a check, the main difference is that they target a specific group of nodes in Infrahub. The check will then only be executed against the nodes in that group.
+1. A proposed change is initiated
+2. The system identifies relevant checks to run
+3. For each check, the GraphQL query is executed to gather data
+4. The Python logic processes this data and returns a pass/fail result
+5. If any check fails, the proposed change cannot be merged
 
-This can be useful if a check should only be executed against a subset of a specific kind of nodes.
+## Types of Checks
 
-An example of such scenario could be that you want to validate that all devices for which we generate an OpenConfig artifact, have the NETCONF service enabled.
+### Global Checks
+
+Global checks apply to all instances of a particular type across your infrastructure. They enforce universal rules that should apply consistently throughout your environment.
+
+**Examples of global checks:**
+- All hostnames must follow the company naming convention
+- All public-facing services must have specific security settings
+
+### Targeted Checks
+
+Targeted checks apply only to a specific subset of nodes that are members of a defined group. This approach allows for more specialized validation rules that only make sense for certain components.
+
+**Examples of targeted checks:**
+- Only devices in the "datacenter-core" group must have redundant power supplies
+- Only servers in the "PCI-DSS" group must have specific compliance settings
+- Only network devices generating OpenConfig artifacts must have NETCONF service enabled
+
+:::tip When to use each type
+
+- Use a **Global Check** when you want to validate all instances of a given type (e.g., all tags must follow a naming convention)
+- Use a **Targeted Check** when you want to validate only specific instances (e.g., only tags in a "colored_tags" group must follow a specific naming convention)
+
+:::
+
+## Mental Models
+
+You can think of checks as:
+
+- **Quality Gates**: Like quality control checkpoints in a manufacturing process
+- **Policy Enforcers**: Similar to how organizations enforce policies through approval workflows
+- **Automated Reviewers**: Like having experts review every change for compliance with best practices
+
+## Connection to Other Concepts
+
+Checks interact with several other Infrahub components:
+
+- **Proposed Changes**: Checks run as part of the proposed change workflow
+- **Repositories**: Checks are stored in and versioned through external repositories
+- **Groups**: Targeted checks use groups to determine which nodes to validate
+
+## Common Use Cases
+
+Organizations typically implement checks to:
+
+- Enforce naming conventions and standardization
+- Validate network redundancy requirements
+- Ensure security policies are applied consistently
+- Verify compliance with regulatory requirements
+
+## Further Reading
+
+- [How to Create a Custom Check](../guides/how-to-create-custom-check)
+- [Working with Proposed Changes](../topics/proposed-change)
+- [Understanding Repositories in Infrahub](../topics/repository)
+- [Working with Groups](../topics/groups)
