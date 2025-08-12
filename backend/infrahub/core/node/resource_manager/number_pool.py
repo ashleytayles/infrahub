@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from infrahub import lock
 from infrahub.core import registry
 from infrahub.core.query.resource_manager import NumberPoolGetReserved, NumberPoolGetUsed, NumberPoolSetReserved
 from infrahub.core.schema.attribute_parameters import NumberAttributeParameters
@@ -44,24 +45,25 @@ class CoreNumberPool(Node):
         identifier: str | None = None,
         at: Timestamp | None = None,
     ) -> int:
-        identifier = identifier or node.get_id()
-        # Check if there is already a resource allocated with this identifier
-        # if not, pull all existing prefixes and allocated the next available
-        # TODO add support for branch, if the node is reserved with this id in another branch we should return an error
-        query_get = await NumberPoolGetReserved.init(db=db, branch=branch, pool_id=self.id, identifier=identifier)
-        await query_get.execute(db=db)
-        reservation = query_get.get_reservation()
-        if reservation is not None:
-            return reservation
+        async with lock.registry.get(name=self.get_id(), namespace="resource_pool"):
+            identifier = identifier or node.get_id()
+            # Check if there is already a resource allocated with this identifier
+            # if not, pull all existing prefixes and allocated the next available
+            # TODO add support for branch, if the node is reserved with this id in another branch we should return an error
+            query_get = await NumberPoolGetReserved.init(db=db, branch=branch, pool_id=self.id, identifier=identifier)
+            await query_get.execute(db=db)
+            reservation = query_get.get_reservation()
+            if reservation is not None:
+                return reservation
 
-        # If we have not returned a value we need to find one if avaiable
-        number = await self.get_next(db=db, branch=branch, attribute=attribute)
+            # If we have not returned a value we need to find one if avaiable
+            number = await self.get_next(db=db, branch=branch, attribute=attribute)
 
-        query_set = await NumberPoolSetReserved.init(
-            db=db, pool_id=self.get_id(), identifier=identifier, reserved=number, at=at
-        )
-        await query_set.execute(db=db)
-        return number
+            query_set = await NumberPoolSetReserved.init(
+                db=db, pool_id=self.get_id(), identifier=identifier, reserved=number, at=at
+            )
+            await query_set.execute(db=db)
+            return number
 
     async def get_next(self, db: InfrahubDatabase, branch: Branch, attribute: BaseAttribute) -> int:
         query = await NumberPoolGetUsed.init(db=db, branch=branch, pool=self, branch_agnostic=True)
