@@ -1,3 +1,4 @@
+from copy import deepcopy
 from random import randint
 from typing import Any
 
@@ -45,6 +46,7 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
             "attributes": [
                 {"name": "generic_attr_text", "kind": "Text", "optional": True, "order_weight": 1111},
                 {"name": "generic_attr_num", "kind": "Number", "optional": True, "order_weight": 2222},
+                {"name": "generic_unique_attr", "kind": "Text", "unique": True, "order_weight": 5555},
             ],
             "relationships": [
                 {
@@ -135,34 +137,64 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         await thing_three.save(db=db)
 
         specific_one = await Node.init(schema=SPECIFIC_ONE_KIND, db=db)
-        await specific_one.new(db=db, generic_attr_text="Alpha", generic_attr_num=1, favorite_thing=thing_one)
+        await specific_one.new(
+            db=db,
+            generic_attr_text="Alpha",
+            generic_attr_num=1,
+            generic_unique_attr="AlphaOne",
+            favorite_thing=thing_one,
+        )
         await specific_one.save(db=db)
 
         deleted_specific_one = await Node.init(schema=SPECIFIC_ONE_KIND, db=db)
         await deleted_specific_one.new(
-            db=db, generic_attr_text="Deleted-Alpha", generic_attr_num=-1, favorite_thing=thing_one
+            db=db,
+            generic_attr_text="Deleted-Alpha",
+            generic_attr_num=-1,
+            generic_unique_attr="Deleted-AlphaOne",
+            favorite_thing=thing_one,
         )
         await deleted_specific_one.save(db=db)
         await deleted_specific_one.delete(db=db)
 
         specific_two = await Node.init(schema=SPECIFIC_TWO_KIND, db=db)
-        await specific_two.new(db=db, generic_attr_text="Bravo", generic_attr_num=2, favorite_thing=thing_two)
+        await specific_two.new(
+            db=db,
+            generic_attr_text="Bravo",
+            generic_attr_num=2,
+            generic_unique_attr="BravoTwo",
+            favorite_thing=thing_two,
+        )
         await specific_two.save(db=db)
 
         deleted_specific_two = await Node.init(schema=SPECIFIC_TWO_KIND, db=db)
         await deleted_specific_two.new(
-            db=db, generic_attr_text="Deleted-Bravo", generic_attr_num=-2, favorite_thing=thing_two
+            db=db,
+            generic_attr_text="Deleted-Bravo",
+            generic_attr_num=-2,
+            generic_unique_attr="Deleted-BravoTwo",
+            favorite_thing=thing_two,
         )
         await deleted_specific_two.save(db=db)
         await deleted_specific_two.delete(db=db)
 
         specific_three = await Node.init(schema=SPECIFIC_THREE_KIND, db=db)
-        await specific_three.new(db=db, generic_attr_text="Charlie", generic_attr_num=3, favorite_thing=thing_three)
+        await specific_three.new(
+            db=db,
+            generic_attr_text="Charlie",
+            generic_attr_num=3,
+            generic_unique_attr="CharlieThree",
+            favorite_thing=thing_three,
+        )
         await specific_three.save(db=db)
 
         deleted_specific_three = await Node.init(schema=SPECIFIC_THREE_KIND, db=db)
         await deleted_specific_three.new(
-            db=db, generic_attr_text="Deleted-Charlie", generic_attr_num=-3, favorite_thing=thing_three
+            db=db,
+            generic_attr_text="Deleted-Charlie",
+            generic_attr_num=-3,
+            generic_unique_attr="Deleted-CharlieThree",
+            favorite_thing=thing_three,
         )
         await deleted_specific_three.save(db=db)
         await deleted_specific_three.delete(db=db)
@@ -194,6 +226,25 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         if request.param:
             return default_branch
         return await registry.get_branch(db=db, branch=branch_name)
+
+    @pytest.fixture(scope="class")
+    def schema_generic_rename_unique_attr(self, schema_generic_base: dict[str, Any]) -> dict[str, Any]:
+        updated_schema = deepcopy(schema_generic_base)
+        for attr in updated_schema["attributes"]:
+            if attr["name"] == "generic_unique_attr":
+                attr["name"] = "generic_unique_attr_new"
+                break
+        return updated_schema
+
+    @pytest.fixture(scope="class")
+    def schema_step_01_5_rename_unique_generic_attr(
+        self,
+        schema_generic_rename_unique_attr,
+    ) -> dict[str, Any]:
+        return {
+            "version": "1.0",
+            "generics": [schema_generic_rename_unique_attr],
+        }
 
     @pytest.fixture(scope="class")
     def schema_specific_one_with_overrides(self, schema_specific_one_base: dict[str, Any]) -> dict[str, Any]:
@@ -417,6 +468,57 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         )
         assert not errors
 
+    async def test_step01_5_rename_unique_generic_attr(
+        self,
+        db: InfrahubDatabase,
+        branch: Branch,
+        client: InfrahubClient,
+        initial_dataset,
+        schema_step_01_5_rename_unique_generic_attr: dict[str, Any],
+    ):
+        await self._finalize_deleted_and_renamed_fields(
+            db=db,
+            branch=branch,
+            full_schema_dict=schema_step_01_5_rename_unique_generic_attr,
+            rename_map={
+                GENERIC_KIND: {
+                    "generic_unique_attr_new": "generic_unique_attr",
+                },
+            },
+        )
+
+        success, response = await client.schema.check(
+            schemas=[schema_step_01_5_rename_unique_generic_attr], branch=branch.name
+        )
+        assert success
+        assert response == {
+            "diff": {
+                "added": {},
+                "changed": {
+                    SPECIFIC_ONE_KIND: {
+                        "added": {},
+                        "changed": {
+                            "attributes": {
+                                "added": {},
+                                "changed": {
+                                    "generic_unique_attr": {
+                                        "added": {},
+                                        "changed": {
+                                            "state": None,
+                                        },
+                                        "removed": {},
+                                    },
+                                },
+                                "removed": {},
+                            },
+                        },
+                        "removed": {},
+                    },
+                },
+                "removed": {},
+            },
+        }
+
     async def test_step02_check_add_specific_overrides(
         self,
         client: InfrahubClient,
@@ -604,22 +706,29 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         )
         assert not errors
 
-    async def _finalize_deleted_fields(self, db: InfrahubDatabase, branch: Branch, full_schema_dict: dict[str, Any]):
+    async def _finalize_deleted_and_renamed_fields(
+        self,
+        db: InfrahubDatabase,
+        branch: Branch,
+        full_schema_dict: dict[str, Any],
+        # {schema_kind: {new_name: old_name}}
+        rename_map: dict[str, dict[str, str]] | None = None,
+    ):
         current_schema_branch = await registry.schema.load_schema_from_db(db=db, branch=branch)
-        for schema_dict in full_schema_dict["generics"] + full_schema_dict["nodes"]:
+        for schema_dict in full_schema_dict.get("generics", []) + full_schema_dict.get("nodes", []):
+            kind = schema_dict["namespace"] + schema_dict["name"]
+            rename_schema_map = rename_map.get(kind, {}) if rename_map else {}
             for attr in schema_dict.get("attributes", []):
-                if attr.get("state") == HashableModelState.ABSENT.value:
-                    schema = current_schema_branch.get(
-                        name=schema_dict["namespace"] + schema_dict["name"], duplicate=False
-                    )
-                    attr_schema = schema.get_attribute(name=attr["name"])
+                if attr.get("state") == HashableModelState.ABSENT.value or attr["name"] in rename_schema_map:
+                    current_attr_name = rename_schema_map.get(attr["name"], attr["name"])
+                    schema = current_schema_branch.get(name=kind, duplicate=False)
+                    attr_schema = schema.get_attribute(name=current_attr_name)
                     attr["id"] = attr_schema.id
             for rel in schema_dict.get("relationships", []):
-                if rel.get("state") == HashableModelState.ABSENT.value:
-                    schema = current_schema_branch.get(
-                        name=schema_dict["namespace"] + schema_dict["name"], duplicate=False
-                    )
-                    rel_schema = schema.get_relationship(name=rel["name"])
+                if rel.get("state") == HashableModelState.ABSENT.value or rel["name"] in rename_schema_map:
+                    current_rel_name = rename_schema_map.get(rel["name"], rel["name"])
+                    schema = current_schema_branch.get(name=kind, duplicate=False)
+                    rel_schema = schema.get_relationship(name=current_rel_name)
                     rel["id"] = rel_schema.id
 
     async def test_step03_check_delete_overridden_field(
@@ -630,7 +739,7 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         branch: Branch,
         schema_step_03: dict[str, Any],
     ):
-        await self._finalize_deleted_fields(db=db, branch=branch, full_schema_dict=schema_step_03)
+        await self._finalize_deleted_and_renamed_fields(db=db, branch=branch, full_schema_dict=schema_step_03)
         success, response = await client.schema.check(schemas=[schema_step_03], branch=branch.name)
         assert success
         assert response == {
@@ -673,7 +782,7 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         branch: Branch,
         schema_step_03: dict[str, Any],
     ):
-        await self._finalize_deleted_fields(db=db, branch=branch, full_schema_dict=schema_step_03)
+        await self._finalize_deleted_and_renamed_fields(db=db, branch=branch, full_schema_dict=schema_step_03)
         # Load the new schema and apply the migrations
         response = await client.schema.load(schemas=[schema_step_03], branch=branch.name)
         assert not response.errors
@@ -922,7 +1031,7 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         branch: Branch,
         schema_step_05: dict[str, Any],
     ):
-        await self._finalize_deleted_fields(db=db, branch=branch, full_schema_dict=schema_step_05)
+        await self._finalize_deleted_and_renamed_fields(db=db, branch=branch, full_schema_dict=schema_step_05)
         success, response = await client.schema.check(schemas=[schema_step_05], branch=branch.name)
         assert success
         assert response == {
@@ -1014,7 +1123,7 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         branch: Branch,
         schema_step_05: dict[str, Any],
     ):
-        await self._finalize_deleted_fields(db=db, branch=branch, full_schema_dict=schema_step_05)
+        await self._finalize_deleted_and_renamed_fields(db=db, branch=branch, full_schema_dict=schema_step_05)
         # Load the new schema and apply the migrations
         response = await client.schema.load(schemas=[schema_step_05], branch=branch.name)
         assert not response.errors
@@ -1092,7 +1201,7 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         branch: Branch,
         schema_step_06: dict[str, Any],
     ):
-        await self._finalize_deleted_fields(db=db, branch=branch, full_schema_dict=schema_step_06)
+        await self._finalize_deleted_and_renamed_fields(db=db, branch=branch, full_schema_dict=schema_step_06)
         success, response = await client.schema.check(schemas=[schema_step_06], branch=branch.name)
         assert success
         assert response == {
@@ -1128,7 +1237,7 @@ class SchemaLifecycleGenericBase(TestSchemaLifecycleBase):
         branch: Branch,
         schema_step_06: dict[str, Any],
     ):
-        await self._finalize_deleted_fields(db=db, branch=branch, full_schema_dict=schema_step_06)
+        await self._finalize_deleted_and_renamed_fields(db=db, branch=branch, full_schema_dict=schema_step_06)
         # Load the new schema and apply the migrations
         response = await client.schema.load(schemas=[schema_step_06], branch=branch.name)
         assert not response.errors
