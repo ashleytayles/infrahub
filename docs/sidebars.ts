@@ -383,6 +383,7 @@ const sidebars: SidebarsConfig = {
       },
       items: [
         'development/git-best-practices',
+        'development/local-repository',
         'development/editor',
         'development/changelog',
         'development/backend',
