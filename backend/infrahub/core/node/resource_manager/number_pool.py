@@ -64,7 +64,8 @@ class CoreNumberPool(Node):
         at: Timestamp | None = None,
     ) -> int:
         async with lock.registry.get(name=self.get_id(), namespace="resource_pool"):
-            async with db.start_session() as dbs:
+            async with db.start_session().start_transaction() as dbt:
+                # async with dbs.() as dbt:
                 # NOTE: ideally we should use the HFID as the identifier (if available)
                 # one of the challenge with using the HFID is that it might change over time
                 # so we need to ensure that the identifier is stable, or we need to handle the case where the identifier changes
@@ -74,16 +75,16 @@ class CoreNumberPool(Node):
                 # if not, pull all existing number and allocate the next available
                 # TODO add support for branch, if the node is reserved with this id in another branch we should return an error
                 query_get = await NumberPoolGetReserved.init(
-                    db=dbs, branch=branch, pool_id=self.id, identifier=identifier
+                    db=dbt, branch=branch, pool_id=self.id, identifier=identifier
                 )
-                await query_get.execute(db=dbs)
+                await query_get.execute(db=dbt)
                 reservation = query_get.get_reservation()
                 if reservation is not None:
                     return reservation
 
                 # If we have not returned a value we need to find one if avaiable
-                number = await self.get_next(db=dbs, branch=branch, attribute=attribute)
-                await self.reserve(db=dbs, number=number, identifier=identifier, at=at)
+                number = await self.get_next(db=dbt, branch=branch, attribute=attribute)
+                await self.reserve(db=dbt, number=number, identifier=identifier, at=at)
                 return number
 
     async def get_next(self, db: InfrahubDatabase, branch: Branch, attribute: AttributeSchema) -> int:
