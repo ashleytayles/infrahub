@@ -11,6 +11,7 @@ class InfrahubHTTP:
         self,
         url: str,
         headers: dict[str, Any] | None = None,
+        timeout: int | None = None,
     ) -> httpx.Response:
         raise NotImplementedError()
 
@@ -21,5 +22,6 @@ class InfrahubHTTP:
         json: Any | None = None,
         headers: dict[str, Any] | None = None,
         verify: bool | None = None,
+        timeout: int | None = None,
     ) -> httpx.Response:
         raise NotImplementedError()

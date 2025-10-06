@@ -14,6 +14,7 @@ class MemoryHTTP(InfrahubHTTP):
         self,
         url: str,
         headers: dict[str, Any] | None = None,
+        timeout: int | None = None,
     ) -> httpx.Response:
         return self._get_response[url]
 
@@ -24,6 +25,7 @@ class MemoryHTTP(InfrahubHTTP):
         json: Any | None = None,
         headers: dict[str, Any] | None = None,
         verify: bool | None = None,
+        timeout: int | None = None,
     ) -> httpx.Response:
         return self._post_response[url]
 

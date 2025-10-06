@@ -52,6 +52,7 @@ class HttpxAdapter(InfrahubHTTP):
         json: Any | None = None,
         headers: dict[str, Any] | None = None,
         verify: bool | None = None,
+        timeout: int | None = None,
     ) -> httpx.Response:
         """Returns an httpx.Response object or raises HTTPServerError or child classes."""
         params: dict[str, Any] = {}
@@ -65,7 +66,7 @@ class HttpxAdapter(InfrahubHTTP):
                     method=method,
                     url=url,
                     headers=headers,
-                    timeout=self.settings.timeout,
+                    timeout=timeout or self.settings.timeout,
                     **params,
                 )
             except ssl.SSLCertVerificationError as exc:
@@ -87,11 +88,13 @@ class HttpxAdapter(InfrahubHTTP):
         self,
         url: str,
         headers: dict[str, Any] | None = None,
+        timeout: int | None = None,
     ) -> httpx.Response:
         return await self._request(
             method="get",
             url=url,
             headers=headers,
+            timeout=timeout,
         )
 
     async def post(
@@ -101,5 +104,8 @@ class HttpxAdapter(InfrahubHTTP):
         json: Any | None = None,
         headers: dict[str, Any] | None = None,
         verify: bool | None = None,
+        timeout: int | None = None,
     ) -> httpx.Response:
-        return await self._request(method="post", url=url, data=data, json=json, headers=headers, verify=verify)
+        return await self._request(
+            method="post", url=url, data=data, json=json, headers=headers, verify=verify, timeout=timeout
+        )

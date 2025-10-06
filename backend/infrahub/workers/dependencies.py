@@ -1,10 +1,12 @@
 from typing import Any
 
+import httpx
 from fast_depends import Depends, inject
 from infrahub_sdk.client import InfrahubClient
 from infrahub_sdk.config import Config
+from infrahub_sdk.types import HTTPMethod
 
-from infrahub import config
+from infrahub import config, services
 from infrahub.components import ComponentType
 from infrahub.constants.environment import INSTALLATION_TYPE
 from infrahub.core.registry import registry
@@ -34,8 +36,27 @@ def get_component_type() -> ComponentType:
         raise ValueError("Component type is not set. It needs to be initialized before working with services.") from exc
 
 
+async def internal_requester(
+    url: str,
+    method: HTTPMethod,
+    headers: dict[str, Any],
+    timeout: int,
+    payload: dict | None = None,
+) -> httpx.Response:
+    if method == HTTPMethod.GET:
+        return await get_http().get(url=url, headers=headers, timeout=timeout)
+    if method == HTTPMethod.POST:
+        return await get_http().post(url=url, json=payload, headers=headers, timeout=timeout)
+
+    raise Exception("Unsupported HTTP Method")
+
+
 def build_client() -> InfrahubClient:
-    return InfrahubClient(config=Config(address=config.SETTINGS.main.internal_address, retry_on_failure=True))
+    return InfrahubClient(
+        config=Config(
+            address=config.SETTINGS.main.internal_address, retry_on_failure=True, requester=internal_requester
+        )
+    )
 
 
 @inject
