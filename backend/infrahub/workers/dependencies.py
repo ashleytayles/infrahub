@@ -6,7 +6,7 @@ from infrahub_sdk.client import InfrahubClient
 from infrahub_sdk.config import Config
 from infrahub_sdk.types import HTTPMethod
 
-from infrahub import config, services
+from infrahub import config
 from infrahub.components import ComponentType
 from infrahub.constants.environment import INSTALLATION_TYPE
 from infrahub.core.registry import registry
