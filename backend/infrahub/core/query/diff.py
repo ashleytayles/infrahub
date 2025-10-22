@@ -760,6 +760,7 @@ CALL (n, p, row_from_time){
 }
 WITH n, p, diff_rel, diff_rel_path, has_more_data, node_or_field_deleted
 WHERE node_or_field_deleted = FALSE
+ORDER BY diff_rel.from DESC
 WITH n, p, type(diff_rel) AS drt, head(collect(diff_rel_path)) AS diff_path, has_more_data
         """ % {"id_func": db.get_id_function_name()}
         self.add_to_query(properties_path_query)
