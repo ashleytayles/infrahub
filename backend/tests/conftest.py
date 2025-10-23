@@ -50,7 +50,7 @@ from infrahub.message_bus.types import MessageTTL
 from infrahub.permissions import LocalPermissionBackend
 from infrahub.services import InfrahubServices
 from infrahub.services.adapters.message_bus import InfrahubMessageBus
-from infrahub.workers.dependencies import get_database
+from infrahub.workers.dependencies import build_database, get_database
 from tests.adapters.log import FakeLogger
 from tests.adapters.message_bus import BusRecorder, BusSimulator
 from tests.helpers.constants import (
@@ -131,12 +131,16 @@ async def db(
             assert memgraph is not None
             config.SETTINGS.database.port = memgraph[PORT_MEMGRAPH]
 
-    driver = await get_database()
-    await add_indexes(db=driver)
+    async def _db(singleton: bool) -> InfrahubDatabase:
+        return await build_database(singleton=False)
 
-    yield driver
+    with provider.scope(build_database, _db):
+        driver = await get_database()
+        await add_indexes(db=driver)
 
-    await driver.close()
+        yield driver
+
+        await driver.close()
 
 
 @pytest.fixture
