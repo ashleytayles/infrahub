@@ -2,13 +2,16 @@ from uuid import uuid4
 
 import pytest
 
+from infrahub.core import registry
 from infrahub.core.branch.models import Branch
-from infrahub.core.constants import DiffAction, InfrahubKind
+from infrahub.core.constants import DiffAction, InfrahubKind, SchemaPathType
 from infrahub.core.diff.artifacts.calculator import ArtifactDiffCalculator
 from infrahub.core.diff.model.diff import ArtifactTarget, BranchDiffArtifact, BranchDiffArtifactStorage
 from infrahub.core.initialization import create_branch
 from infrahub.core.manager import NodeManager
+from infrahub.core.migrations.schema.node_kind_update import NodeKindUpdateMigration
 from infrahub.core.node import Node
+from infrahub.core.path import SchemaPath
 from infrahub.database import InfrahubDatabase
 
 
@@ -91,6 +94,20 @@ async def car_person_data_artifact_diff(
     art1_main.storage_id.value = str(uuid4())
     art1_main.checksum.value = str(uuid4())
     await art1_main.save(db=db)
+
+    original_ecar_schema = registry.schema.get_node_schema(name="TestElectricCar", branch=branch3, duplicate=True)
+    updated_ecar_schema = registry.schema.get_node_schema(name="TestElectricCar", branch=branch3, duplicate=False)
+    updated_ecar_schema.inherit_from.append("GenericNothing")
+
+    migration = NodeKindUpdateMigration(
+        previous_node_schema=original_ecar_schema,
+        new_node_schema=updated_ecar_schema,
+        schema_path=SchemaPath(
+            path_type=SchemaPathType.ATTRIBUTE, schema_kind=original_ecar_schema.kind, field_name="inherit_from"
+        ),
+    )
+    execution_result = await migration.execute(db=db, branch=branch3)
+    assert not execution_result.errors
 
     # artifact only on branch
     art2 = await Node.init(db=db, schema=InfrahubKind.ARTIFACT, branch=branch3)
