@@ -6,7 +6,6 @@ from infrahub.core import registry
 from infrahub.core.node import Node
 from infrahub.core.schema.generic_schema import GenericSchema
 from infrahub.core.schema.node_schema import NodeSchema
-from infrahub.exceptions import PoolExhaustedError
 from infrahub.tasks.registry import update_branch_registry
 
 from ..query import AttributeMigrationQuery, MigrationBaseQuery
@@ -93,23 +92,21 @@ class NodeAttributeAddMigration(AttributeSchemaMigration):
             db=db, branch=branch, schema=self.new_schema, fields={"id": True, self.new_attribute_schema.name: True}
         )
 
-        try:
-            numbers = await number_pool.get_next_many(
-                db=db,
-                branch=branch,
-                quantity=len(nodes),
-                attribute=self.new_attribute_schema,
-            )
-        except PoolExhaustedError as exc:
-            result.errors.append(str(exc))
-            return result
+        async def allocate_numbers(db: InfrahubDatabase) -> None:
+            for node in nodes:
+                number = await number_pool.get_resource(
+                    db=db, branch=branch, node=node, attribute=self.new_attribute_schema
+                )
+                attr = getattr(node, self.new_attribute_schema.name)
+                attr.value = number
+                attr.source = number_pool.id
 
-        for node, number in zip(nodes, numbers, strict=True):
-            await number_pool.reserve(db=db, number=number, identifier=node.get_id())
-            attr = getattr(node, self.new_attribute_schema.name)
-            attr.value = number
-            attr.source = number_pool.id
+                await node.save(db=db, fields=[self.new_attribute_schema.name])
 
-            await node.save(db=db, fields=[self.new_attribute_schema.name])
+        if db.is_transaction:
+            await allocate_numbers(db=db)
+        else:
+            async with db.start_transaction() as dbt:
+                await allocate_numbers(db=dbt)
 
         return result
