@@ -37,6 +37,7 @@ from infrahub.core.query.relationship import (
     RelationshipPeerData,
     RelationshipUpdatePropertyQuery,
 )
+from infrahub.core.relationship.batch_creator import RelationshipBatchCreator
 from infrahub.core.timestamp import Timestamp
 from infrahub.exceptions import NodeNotFoundError, ValidationError
 
@@ -1325,15 +1326,24 @@ class RelationshipManager:
                 relationship_mapper.remove_peer(peer_data=details.peers_database[peer_id])
                 await self.remove_in_db(db=db, peer_data=details.peers_database[peer_id], user_id=user_id, at=save_at)
 
-        # Create the new relationship that are not present in the database
-        #  and Compare the existing one
-        for rel in await self.get_relationships(db=db, branch_agnostic=branch_agnostic):
-            if rel.peer_id in details.peer_ids_present_local_only:
-                await rel.save(db=db, user_id=user_id, at=save_at)
+        # Create the new relationships that are not present in the database
+        # using a batch query for efficiency
+        relationships = await self.get_relationships(db=db, branch_agnostic=branch_agnostic)
+        rels_to_create: list[Relationship] = []
+        for rel in relationships:
+            if rel.peer_id in details.peer_ids_present_local_only and not rel.id:
+                rels_to_create.append(rel)
 
+        if rels_to_create:
+            branch = self.get_branch_based_on_support_type()
+            batch_creator = RelationshipBatchCreator(db=db, branch=branch)
+            await batch_creator.save(relationships=rels_to_create, at=save_at, user_id=user_id)
+            for rel in rels_to_create:
                 relationship_mapper.add_peer_from_relationship(relationship=rel)
 
-            elif rel.peer_id in details.peer_ids_present_both:
+        # Compare the existing relationships and update if needed
+        for rel in relationships:
+            if rel.peer_id in details.peer_ids_present_both:
                 if properties_not_matching := rel.compare_properties_with_data(
                     data=details.peers_database[rel.peer_id]
                 ):

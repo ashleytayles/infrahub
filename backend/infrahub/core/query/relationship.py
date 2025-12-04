@@ -393,6 +393,260 @@ CREATE (rl)-[:HAS_%s { branch: $branch, branch_level: $branch_level, status: "ac
         self.add_to_query(query)
 
 
+@dataclass
+class RelationshipBatchCreateData:
+    """Data for a single relationship to be created in a batch operation.
+
+    The `identifier` field is used to correlate input with output - it is NOT the
+    UUID of the created Relationship vertex. The Relationship UUID is generated
+    by the database query and returned alongside the identifier.
+    """
+
+    identifier: str
+    source_id: str
+    destination_id: str
+    name: str
+    branch_support: str
+    is_protected: bool
+    direction: RelationshipDirection
+    hierarchical: str | None = None
+    source_prop_id: str | None = None
+    owner_prop_id: str | None = None
+
+
+@dataclass
+class RelationshipBatchCreateResult:
+    """Result for a single relationship created in a batch operation.
+
+    - identifier: The correlation ID from RelationshipBatchCreateData.identifier
+    - rel_uuid: The generated UUID of the Relationship vertex
+    - element_id: The Neo4j element ID of the Relationship vertex
+    """
+
+    identifier: str
+    rel_uuid: str
+    element_id: str
+
+
+class RelationshipBatchCreateQuery(Query):
+    """Batch creates multiple relationships in a single database query.
+
+    This query uses UNWIND to process multiple relationships at once, significantly
+    reducing the number of database round-trips compared to creating relationships
+    one at a time with RelationshipCreateQuery.
+    """
+
+    name = "relationship_batch_create"
+    type: QueryType = QueryType.WRITE
+
+    def __init__(
+        self,
+        relationships: list[RelationshipBatchCreateData],
+        user_id: str,
+        **kwargs,
+    ):
+        self.relationships = relationships
+        self.user_id = user_id
+        super().__init__(**kwargs)
+
+    async def query_init(self, db: InfrahubDatabase, **kwargs) -> None:  # noqa: ARG002
+        if not self.relationships:
+            raise ValueError("RelationshipBatchCreateQuery requires at least one relationship")
+
+        self.params["at"] = self.at.to_string()
+        self.params["branch"] = self.branch.name
+        self.params["branch_level"] = self.branch.hierarchy_level
+        self.params["user_id"] = self.user_id
+        self.params["include_metadata"] = self.branch.is_default or self.branch.is_global
+
+        # Build list of relationship data for UNWIND
+        rel_data_list = []
+        for rel in self.relationships:
+            rel_data = {
+                "identifier": rel.identifier,
+                "source_id": rel.source_id,
+                "destination_id": rel.destination_id,
+                "name": rel.name,
+                "branch_support": rel.branch_support,
+                "is_protected": rel.is_protected,
+                "hierarchical": rel.hierarchical,
+                "source_prop_id": rel.source_prop_id,
+                "owner_prop_id": rel.owner_prop_id,
+                # Determine arrow directions based on relationship direction
+                "is_outbound": rel.direction == RelationshipDirection.OUTBOUND,
+                "is_inbound": rel.direction == RelationshipDirection.INBOUND,
+                "is_bidir": rel.direction == RelationshipDirection.BIDIR,
+            }
+            rel_data_list.append(rel_data)
+
+        self.params["rel_data_list"] = rel_data_list
+
+        # Build branch filter for checking source and destination nodes exist
+        branch_filter, branch_params = self.branch.get_query_filter_path(at=self.at)
+        self.params.update(branch_params)
+
+        query = """
+        UNWIND $rel_data_list AS rel_data
+        WITH rel_data, randomUUID() AS generated_uuid
+
+        // Match source node and verify it's active
+        MATCH (s:Node {uuid: rel_data.source_id})
+        CALL (s) {
+            MATCH (s)-[r:IS_PART_OF]->(:Root)
+            WHERE %(branch_filter)s
+            RETURN r.status = "active" AS s_is_active
+            ORDER BY r.branch_level DESC, r.from DESC, r.status ASC
+            LIMIT 1
+        }
+        WITH rel_data, generated_uuid, s
+        WHERE s_is_active = TRUE
+
+        // Match destination node and verify it's active
+        MATCH (d:Node {uuid: rel_data.destination_id})
+        CALL (d) {
+            MATCH (d)-[r:IS_PART_OF]->(:Root)
+            WHERE %(branch_filter)s
+            RETURN r.status = "active" AS d_is_active
+            ORDER BY r.branch_level DESC, r.from DESC, r.status ASC
+            LIMIT 1
+        }
+        WITH rel_data, generated_uuid, s, d
+        WHERE d_is_active = TRUE
+
+        // Create the Relationship node with a generated UUID
+        CREATE (rl:Relationship {
+            uuid: generated_uuid,
+            name: rel_data.name,
+            branch_support: rel_data.branch_support
+        })
+
+        // Set metadata if on default/global branch
+        WITH rel_data, s, d, rl
+        CALL (rl) {
+            WITH rl
+            WHERE $include_metadata = TRUE
+            SET rl.created_at = $at,
+                rl.created_by = $user_id,
+                rl.updated_at = $at,
+                rl.updated_by = $user_id
+        }
+
+        // Create IS_RELATED edges based on direction
+        // For BIDIR:    (s)-[r1]->(rl)<-[r2]-(d)
+        // For OUTBOUND: (s)-[r1]->(rl)-[r2]->(d)
+        // For INBOUND:  (s)<-[r1]-(rl)<-[r2]-(d)
+        WITH rel_data, s, d, rl,
+             {
+                 branch: $branch,
+                 branch_level: $branch_level,
+                 status: "active",
+                 from: $at,
+                 from_user_id: $user_id,
+                 hierarchy: rel_data.hierarchical
+             } AS rel_prop
+
+        // Create first IS_RELATED edge (source to/from relationship)
+        // BIDIR and OUTBOUND: (s)-[r1]->(rl)
+        // INBOUND: (s)<-[r1]-(rl)
+        CALL (s, rl, rel_data, rel_prop) {
+            WITH s, rl, rel_prop, rel_data
+            WHERE rel_data.is_bidir = TRUE OR rel_data.is_outbound = TRUE
+            CREATE (s)-[r1:IS_RELATED]->(rl)
+            SET r1 = rel_prop
+        }
+        CALL (s, rl, rel_data, rel_prop) {
+            WITH s, rl, rel_prop, rel_data
+            WHERE rel_data.is_inbound = TRUE
+            CREATE (s)<-[r1:IS_RELATED]-(rl)
+            SET r1 = rel_prop
+        }
+
+        // Create second IS_RELATED edge (relationship to/from destination)
+        // BIDIR and INBOUND: (rl)<-[r2]-(d)
+        // OUTBOUND: (rl)-[r2]->(d)
+        WITH rel_data, s, d, rl, rel_prop
+        CALL (rl, d, rel_data, rel_prop) {
+            WITH rl, d, rel_prop, rel_data
+            WHERE rel_data.is_bidir = TRUE OR rel_data.is_inbound = TRUE
+            CREATE (rl)<-[r2:IS_RELATED]-(d)
+            SET r2 = rel_prop
+        }
+        CALL (rl, d, rel_data, rel_prop) {
+            WITH rl, d, rel_prop, rel_data
+            WHERE rel_data.is_outbound = TRUE
+            CREATE (rl)-[r2:IS_RELATED]->(d)
+            SET r2 = rel_prop
+        }
+
+        // Create IS_PROTECTED edge
+        WITH rel_data, s, d, rl, rel_prop
+        MERGE (ip:Boolean {value: rel_data.is_protected})
+        CREATE (rl)-[:IS_PROTECTED {
+            branch: $branch,
+            branch_level: $branch_level,
+            status: "active",
+            from: $at,
+            from_user_id: $user_id
+        }]->(ip)
+
+        // Handle optional source property
+        WITH rel_data, s, d, rl, rel_prop
+        CALL (rl, rel_data, rel_prop) {
+            WITH rl, rel_data, rel_prop
+            WHERE rel_data.source_prop_id IS NOT NULL
+            MATCH (source_node:Node {uuid: rel_data.source_prop_id})
+            CREATE (rl)-[:HAS_SOURCE {
+                branch: rel_prop.branch,
+                branch_level: rel_prop.branch_level,
+                status: "active",
+                from: rel_prop.from,
+                from_user_id: rel_prop.from_user_id
+            }]->(source_node)
+        }
+
+        // Handle optional owner property
+        WITH rel_data, s, d, rl, rel_prop
+        CALL (rl, rel_data, rel_prop) {
+            WITH rl, rel_data, rel_prop
+            WHERE rel_data.owner_prop_id IS NOT NULL
+            MATCH (owner_node:Node {uuid: rel_data.owner_prop_id})
+            CREATE (rl)-[:HAS_OWNER {
+                branch: rel_prop.branch,
+                branch_level: rel_prop.branch_level,
+                status: "active",
+                from: rel_prop.from,
+                from_user_id: rel_prop.from_user_id
+            }]->(owner_node)
+        }
+
+        WITH rel_data, rl
+        """ % {"branch_filter": branch_filter}
+
+        self.add_to_query(query)
+        self.return_labels = [
+            "rel_data.identifier AS identifier",
+            "rl.uuid AS rel_uuid",
+            "elementId(rl) AS element_id",
+        ]
+
+    def get_created_relationships(self) -> list[RelationshipBatchCreateResult]:
+        """Return list of results for created relationships."""
+        results = []
+        for result in self.results:
+            identifier = result.get_as_type(label="identifier", return_type=str)
+            rel_uuid = result.get_as_type(label="rel_uuid", return_type=str)
+            element_id = result.get_as_type(label="element_id", return_type=str)
+            if identifier and rel_uuid and element_id:
+                results.append(
+                    RelationshipBatchCreateResult(
+                        identifier=identifier,
+                        rel_uuid=rel_uuid,
+                        element_id=element_id,
+                    )
+                )
+        return results
+
+
 class RelationshipUpdatePropertyQuery(RelationshipWriteQuery):
     name = "relationship_property_update"
     type = QueryType.WRITE
@@ -701,21 +955,6 @@ class RelationshipGetPeerQuery(Query):
 
         super().__init__(**kwargs)
 
-    def _add_is_visible_query(self, branch_filter: str) -> None:
-        if not (self.include_metadata & MetadataOptions.IS_VISIBLE):
-            return
-        query = """
-CALL (rl) {
-    MATCH (rl)-[r:IS_VISIBLE]-(is_visible)
-    WHERE %(branch_filter)s
-    RETURN r AS rel_is_visible, is_visible
-    ORDER BY r.branch_level DESC, r.from DESC, r.status ASC
-    LIMIT 1
-}
-        """ % {"branch_filter": branch_filter}
-        self.add_to_query(query)
-        self.update_return_labels(["rel_is_visible", "is_visible"])
-
     def _add_is_protected_query(self, branch_filter: str) -> None:
         if not (self.include_metadata & MetadataOptions.IS_PROTECTED):
             return
@@ -918,7 +1157,6 @@ CALL (rl) {
         # add metadata
         # ----------------------------------------------------------------------------
         self._add_is_protected_query(branch_filter)
-        self._add_is_visible_query(branch_filter)
         self._add_has_owner_query(branch_filter)
         self._add_has_source_query(branch_filter)
         self._add_created_metadata_to_query()
@@ -998,7 +1236,6 @@ CALL (rl) {
 
             for prop, metadata_option in [
                 ("is_protected", MetadataOptions.IS_PROTECTED),
-                ("is_visible", MetadataOptions.IS_VISIBLE),
             ]:
                 if not self.include_metadata & metadata_option:
                     continue

@@ -12,6 +12,9 @@ from infrahub.core.migrations.schema.node_kind_update import NodeKindUpdateMigra
 from infrahub.core.node import Node
 from infrahub.core.path import SchemaPath
 from infrahub.core.query.relationship import (
+    RelationshipBatchCreateData,
+    RelationshipBatchCreateQuery,
+    RelationshipBatchCreateResult,
     RelationshipCountPerNodeQuery,
     RelationshipCreateQuery,
     RelationshipDeleteQuery,
@@ -1170,3 +1173,161 @@ async def test_query_RelationshipGetByIdentifierQuery(
     )
     await query.execute(db=db)
     assert await query.count(db=db) == 4
+
+
+async def test_query_RelationshipBatchCreateQuery(
+    db: InfrahubDatabase, tag_blue_main: Node, tag_red_main: Node, person_jack_main: Node, branch: Branch
+) -> None:
+    """Test that RelationshipBatchCreateQuery can create multiple relationships in a single query."""
+
+    person_schema = registry.schema.get(name="TestPerson")
+    rel_schema = person_schema.get_relationship("tags")
+
+    # Verify no relationships exist initially
+    paths_blue = await get_paths_between_nodes(
+        db=db,
+        source_id=tag_blue_main.db_id,
+        destination_id=person_jack_main.db_id,
+        max_length=2,
+        relationships=["IS_RELATED"],
+    )
+    paths_red = await get_paths_between_nodes(
+        db=db,
+        source_id=tag_red_main.db_id,
+        destination_id=person_jack_main.db_id,
+        max_length=2,
+        relationships=["IS_RELATED"],
+    )
+    assert len(paths_blue) == 0
+    assert len(paths_red) == 0
+
+    # Create batch data for two relationships
+    rel_data = [
+        RelationshipBatchCreateData(
+            identifier="rel-1",
+            source_id=person_jack_main.id,
+            destination_id=tag_blue_main.id,
+            name=rel_schema.identifier,
+            branch_support=rel_schema.branch.value,
+            is_protected=False,
+            direction=rel_schema.direction,
+            hierarchical=rel_schema.hierarchical,
+        ),
+        RelationshipBatchCreateData(
+            identifier="rel-2",
+            source_id=person_jack_main.id,
+            destination_id=tag_red_main.id,
+            name=rel_schema.identifier,
+            branch_support=rel_schema.branch.value,
+            is_protected=True,
+            direction=rel_schema.direction,
+            hierarchical=rel_schema.hierarchical,
+        ),
+    ]
+
+    query = await RelationshipBatchCreateQuery.init(
+        db=db,
+        relationships=rel_data,
+        branch=branch,
+        at=Timestamp(),
+        user_id="user1",
+    )
+    await query.execute(db=db)
+
+    # Verify relationships were created
+    created_rels = query.get_created_relationships()
+    assert len(created_rels) == 2
+
+    # Verify the result structure
+    identifiers = {r.identifier for r in created_rels}
+    assert identifiers == {"rel-1", "rel-2"}
+    for r in created_rels:
+        assert isinstance(r, RelationshipBatchCreateResult)
+        assert r.rel_uuid  # Generated UUID
+        assert r.element_id  # Neo4j element ID
+
+    # Verify paths exist for both relationships
+    paths_blue = await get_paths_between_nodes(
+        db=db,
+        source_id=tag_blue_main.db_id,
+        destination_id=person_jack_main.db_id,
+        max_length=2,
+        relationships=["IS_RELATED"],
+    )
+    paths_red = await get_paths_between_nodes(
+        db=db,
+        source_id=tag_red_main.db_id,
+        destination_id=person_jack_main.db_id,
+        max_length=2,
+        relationships=["IS_RELATED"],
+    )
+    assert len(paths_blue) == 1
+    assert len(paths_red) == 1
+
+
+async def test_query_RelationshipBatchCreateQuery_with_node_properties(
+    db: InfrahubDatabase,
+    tag_blue_main: Node,
+    person_jack_main: Node,
+    first_account: Node,
+    branch: Branch,
+) -> None:
+    """Test that RelationshipBatchCreateQuery correctly sets source and owner properties."""
+
+    person_schema = registry.schema.get(name="TestPerson")
+    rel_schema = person_schema.get_relationship("tags")
+
+    rel_data = [
+        RelationshipBatchCreateData(
+            identifier="rel-with-props",
+            source_id=person_jack_main.id,
+            destination_id=tag_blue_main.id,
+            name=rel_schema.identifier,
+            branch_support=rel_schema.branch.value,
+            is_protected=True,
+            direction=rel_schema.direction,
+            hierarchical=rel_schema.hierarchical,
+            source_prop_id=first_account.id,
+            owner_prop_id=first_account.id,
+        ),
+    ]
+
+    query = await RelationshipBatchCreateQuery.init(
+        db=db,
+        relationships=rel_data,
+        branch=branch,
+        at=Timestamp(),
+        user_id="user1",
+    )
+    await query.execute(db=db)
+
+    created_rels = query.get_created_relationships()
+    assert len(created_rels) == 1
+
+    # Verify the relationship properties were created
+    database_relationships = await get_relationship_properties(
+        db=db, source_uuid=person_jack_main.get_id(), destination_uuid=tag_blue_main.get_id()
+    )
+
+    property_types = {dr.property_type for dr in database_relationships}
+    assert "IS_PROTECTED" in property_types
+    assert "HAS_SOURCE" in property_types
+    assert "HAS_OWNER" in property_types
+
+    # Verify is_protected value
+    is_protected_props = [dr for dr in database_relationships if dr.property_type == "IS_PROTECTED"]
+    assert len(is_protected_props) == 1
+    assert is_protected_props[0].value is True
+
+
+async def test_query_RelationshipBatchCreateQuery_empty_list(db: InfrahubDatabase, branch: Branch) -> None:
+    """Test that RelationshipBatchCreateQuery raises ValueError for empty list."""
+    with pytest.raises(ValueError) as exc:
+        await RelationshipBatchCreateQuery.init(
+            db=db,
+            relationships=[],
+            branch=branch,
+            at=Timestamp(),
+            user_id="user1",
+        )
+    assert "requires at least one relationship" in str(exc.value)

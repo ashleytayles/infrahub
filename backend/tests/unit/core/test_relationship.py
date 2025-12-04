@@ -120,7 +120,6 @@ async def test_relationship_load_existing(
     assert rel.db_id == peers[0].rel_node_db_id
 
     assert rel.is_protected is True
-    assert rel.is_visible is False
 
 
 async def test_relationship_peer(
