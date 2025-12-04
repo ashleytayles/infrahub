@@ -1235,7 +1235,7 @@ async def test_query_RelationshipBatchCreateQuery(
     await query.execute(db=db)
 
     # Verify relationships were created
-    created_rels = query.get_created_relationships()
+    created_rels = [r async for r in query.get_created_relationships()]
     assert len(created_rels) == 2
 
     # Verify the result structure
@@ -1301,7 +1301,7 @@ async def test_query_RelationshipBatchCreateQuery_with_node_properties(
     )
     await query.execute(db=db)
 
-    created_rels = query.get_created_relationships()
+    created_rels = [r async for r in query.get_created_relationships()]
     assert len(created_rels) == 1
 
     # Verify the relationship properties were created

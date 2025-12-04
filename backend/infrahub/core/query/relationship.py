@@ -21,6 +21,7 @@ from infrahub.core.utils import extract_field_filters
 from infrahub.log import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from uuid import UUID
 
     from neo4j.graph import Relationship as Neo4jRelationship
@@ -629,22 +630,18 @@ class RelationshipBatchCreateQuery(Query):
             "elementId(rl) AS element_id",
         ]
 
-    def get_created_relationships(self) -> list[RelationshipBatchCreateResult]:
-        """Return list of results for created relationships."""
-        results = []
+    async def get_created_relationships(self) -> AsyncGenerator[RelationshipBatchCreateResult, None]:
+        """Yield results for created relationships."""
         for result in self.results:
             identifier = result.get_as_type(label="identifier", return_type=str)
             rel_uuid = result.get_as_type(label="rel_uuid", return_type=str)
             element_id = result.get_as_type(label="element_id", return_type=str)
             if identifier and rel_uuid and element_id:
-                results.append(
-                    RelationshipBatchCreateResult(
-                        identifier=identifier,
-                        rel_uuid=rel_uuid,
-                        element_id=element_id,
-                    )
+                yield RelationshipBatchCreateResult(
+                    identifier=identifier,
+                    rel_uuid=rel_uuid,
+                    element_id=element_id,
                 )
-        return results
 
 
 class RelationshipUpdatePropertyQuery(RelationshipWriteQuery):

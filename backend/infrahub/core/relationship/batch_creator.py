@@ -94,7 +94,7 @@ class RelationshipBatchCreator:
 
         # Map results back to relationships
         results_by_identifier: dict[str, RelationshipBatchCreateResult] = {
-            result.identifier: result for result in batch_query.get_created_relationships()
+            result.identifier: result async for result in batch_query.get_created_relationships()
         }
         for rel in relationships:
             if rel.peer_id in results_by_identifier:
