@@ -4,16 +4,26 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import typer
 from anyio.abc import TaskStatus
+from cachetools import LRUCache
 from infrahub_sdk import Config, InfrahubClient
 from infrahub_sdk.exceptions import Error as SdkError
+from prefect import __version__ as prefect_version
 from prefect import settings as prefect_settings
+from prefect.client.schemas.objects import Flow as APIFlow
 from prefect.client.schemas.objects import FlowRun
+from prefect.client.schemas.responses import DeploymentResponse
 from prefect.context import AsyncClientContext
+from prefect.events.clients import EventsClient, get_events_client
+from prefect.events.related import tags_as_related_resources
+from prefect.events.schemas.events import Event, RelatedResource, Resource
+from prefect.exceptions import ObjectNotFound
 from prefect.flow_engine import run_flow_async
 from prefect.logging.handlers import APILogHandler
+from prefect.utilities.services import critical_service_loop
 from prefect.workers.base import BaseJobConfiguration, BaseVariables, BaseWorker, BaseWorkerResult
 from prometheus_client import start_http_server
 
@@ -74,12 +84,27 @@ class InfrahubWorkerAsync(BaseWorker):
     service: InfrahubServices  # keep a reference to `service` so we can inject it within flows parameters.
     component_type = ComponentType.GIT_AGENT
 
+    # Heartbeat-related attributes
+    _events_client: EventsClient | None
+    _heartbeat_task: asyncio.Task[None] | None = None
+    _heartbeat_seconds: float | None = None
+    _flow_run_map: dict[UUID, FlowRun]
+    _deployment_cache: LRUCache[UUID, DeploymentResponse]
+    _flow_cache: LRUCache[UUID, APIFlow]
+
     async def setup(
         self,
         client: InfrahubClient | None = None,
         metric_port: int | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
+        # Initialize heartbeat-related attributes
+        self._flow_run_map = {}
+        self._deployment_cache = LRUCache(maxsize=100)
+        self._flow_cache = LRUCache(maxsize=100)
+        self._events_client = None
+        self._heartbeat_seconds = None
+
         logging.getLogger("websockets").setLevel(logging.ERROR)
         logging.getLogger("httpx").setLevel(logging.ERROR)
         logging.getLogger("httpcore").setLevel(logging.ERROR)
@@ -143,6 +168,23 @@ class InfrahubWorkerAsync(BaseWorker):
         initialize_repositories_directory()
         build_component_registry()
         await self.service.scheduler.start_schedule()
+
+        # Start the heartbeat background task only if heartbeat_interval is configured
+        self._heartbeat_seconds = config.SETTINGS.workflow.heartbeat_interval
+        if self._heartbeat_seconds is not None:
+            self._events_client = get_events_client(checkpoint_every=1)
+            await self._exit_stack.enter_async_context(self._events_client)
+            self._heartbeat_task = asyncio.create_task(
+                critical_service_loop(
+                    workload=self._emit_flow_run_heartbeats,
+                    interval=self._heartbeat_seconds,
+                    jitter_range=0.3,
+                )
+            )
+            self._logger.info(f"Heartbeat system enabled with interval of {self._heartbeat_seconds} seconds")
+        else:
+            self._logger.info("Heartbeat system disabled (heartbeat_interval is null)")
+
         self._logger.info("Worker initialization completed .. ")
 
     async def run(
@@ -165,9 +207,18 @@ class InfrahubWorkerAsync(BaseWorker):
         if task_status:
             task_status.started(True)
 
-        async with AsyncClientContext(httpx_settings={"verify": get_http().verify_tls()}) as ctx:
-            ctx._httpx_settings = None  # Hack to make all child task/flow runs use the same client
-            await run_flow_async(flow=flow_func, flow_run=flow_run, parameters=params, return_type="state")
+        # Track flow run for heartbeats and emit initial heartbeat before running
+        self._flow_run_map[flow_run.id] = flow_run
+        if self._heartbeat_seconds is not None:
+            await self._emit_flow_run_heartbeat(flow_run)
+
+        try:
+            async with AsyncClientContext(httpx_settings={"verify": get_http().verify_tls()}) as ctx:
+                ctx._httpx_settings = None  # Hack to make all child task/flow runs use the same client
+                await run_flow_async(flow=flow_func, flow_run=flow_run, parameters=params, return_type="state")
+        finally:
+            # Remove flow run from tracking when done
+            self._flow_run_map.pop(flow_run.id, None)
 
         return InfrahubWorkerAsyncResult(status_code=0, identifier=str(flow_run.id))
 
@@ -251,3 +302,108 @@ class InfrahubWorkerAsync(BaseWorker):
             self._logger.error(f"Failed to set git {setting_name}: %s", error_msg)
         else:
             self._logger.info(f"Git {setting_name} set")
+
+    async def teardown(self, *exc_info: Any) -> None:
+        """Clean up resources after the worker is stopped."""
+        # Cancel the heartbeat task
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._heartbeat_task
+            self._heartbeat_task = None
+
+        await super().teardown(*exc_info)
+
+    async def _get_flow_and_deployment(self, flow_run: FlowRun) -> tuple[APIFlow | None, DeploymentResponse | None]:
+        """
+        Retrieve flow and deployment information for a flow run.
+
+        Uses caching to avoid repeated API calls.
+
+        Args:
+            flow_run: The flow run to get information for.
+
+        Returns:
+            A tuple of (flow, deployment), either of which may be None.
+        """
+        deployment: DeploymentResponse | None = (
+            self._deployment_cache.get(flow_run.deployment_id) if flow_run.deployment_id else None
+        )
+        flow: APIFlow | None = self._flow_cache.get(flow_run.flow_id)
+
+        if not deployment and flow_run.deployment_id is not None:
+            try:
+                deployment = await self.client.read_deployment(flow_run.deployment_id)
+                self._deployment_cache[flow_run.deployment_id] = deployment
+            except ObjectNotFound:
+                deployment = None
+
+        if not flow:
+            try:
+                flow = await self.client.read_flow(flow_run.flow_id)
+                self._flow_cache[flow_run.flow_id] = flow
+            except ObjectNotFound:
+                flow = None
+
+        return flow, deployment
+
+    async def _emit_flow_run_heartbeats(self) -> None:
+        """
+        Emit heartbeat events for all currently running flow runs.
+
+        This method is called periodically by the heartbeat background task.
+        """
+        coros = [self._emit_flow_run_heartbeat(flow_run) for flow_run in self._flow_run_map.values()]
+        await asyncio.gather(*coros, return_exceptions=True)
+
+    async def _emit_flow_run_heartbeat(self, flow_run: FlowRun) -> None:
+        """
+        Emit a heartbeat event for a single flow run.
+
+        The heartbeat event includes related resources such as the flow and deployment,
+        as well as any associated tags.
+
+        Args:
+            flow_run: The flow run to emit a heartbeat for.
+        """
+        if self._events_client is None:
+            return
+
+        related: list[RelatedResource] = []
+        tags: list[str] = []
+
+        flow, deployment = await self._get_flow_and_deployment(flow_run)
+
+        if deployment:
+            related.append(deployment.as_related_resource())
+            tags.extend(deployment.tags)
+
+        if flow:
+            related.append(
+                RelatedResource(
+                    {
+                        "prefect.resource.id": f"prefect.flow.{flow.id}",
+                        "prefect.resource.role": "flow",
+                        "prefect.resource.name": flow.name,
+                    }
+                )
+            )
+
+        tags.extend(flow_run.tags)
+
+        related = [RelatedResource.model_validate(r) for r in related]
+        related += tags_as_related_resources(set(tags))
+
+        await self._events_client.emit(
+            Event(
+                event="prefect.flow-run.heartbeat",
+                resource=Resource(
+                    {
+                        "prefect.resource.id": f"prefect.flow-run.{flow_run.id}",
+                        "prefect.resource.name": flow_run.name,
+                        "prefect.version": prefect_version,
+                    }
+                ),
+                related=related,
+            )
+        )

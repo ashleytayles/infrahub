@@ -416,6 +416,11 @@ class WorkflowSettings(BaseSettings):
     worker_polling_interval: int = Field(
         default=2, ge=1, le=30, description="Specify how often the worker should poll the server for tasks (sec)"
     )
+    heartbeat_interval: int | None = Field(
+        default=30,
+        ge=1,
+        description="Interval in seconds for emitting flow run heartbeats. Set to null to disable heartbeats.",
+    )
     flow_run_count_cache_threshold: int = Field(
         default=100_000,
         ge=0,
