@@ -10,12 +10,15 @@ from prefect.exceptions import PrefectHTTPStatusError
 
 from infrahub import lock
 from infrahub.database import InfrahubDatabase
-from infrahub.trigger.models import TriggerDefinition
+from infrahub.trigger.models import SystemTriggerDefinition, TriggerDefinition
 
 from .models import TriggerComparison, TriggerSetupReport, TriggerType
 
 if TYPE_CHECKING:
     from uuid import UUID
+
+# Type alias for all trigger definition types
+AnyTriggerDefinition = TriggerDefinition | SystemTriggerDefinition
 
 
 def compare_automations(
@@ -69,7 +72,7 @@ async def setup_triggers_specific(
 @task(name="trigger-setup", task_run_name="Setup triggers", cache_policy=NONE)
 async def setup_triggers(
     client: PrefectClient,
-    triggers: Sequence[TriggerDefinition],
+    triggers: Sequence[AnyTriggerDefinition],
     trigger_type: TriggerType | None = None,
     force_update: bool = False,
 ) -> TriggerSetupReport:
@@ -119,7 +122,7 @@ async def setup_triggers(
             description=trigger.get_description(),
             enabled=True,
             trigger=trigger.trigger.get_prefect(),
-            actions=[action.get_prefect(mapping=deployments_mapping) for action in trigger.actions],
+            actions=[action.get_prefect(deployments_mapping) for action in trigger.actions],
         )
 
         existing_automation = existing_automations.get(trigger.generate_name())

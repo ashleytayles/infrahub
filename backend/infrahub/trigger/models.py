@@ -4,7 +4,8 @@ from datetime import timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from prefect.events.actions import RunDeployment
+from prefect.client.schemas.objects import StateType  # noqa: TC002
+from prefect.events.actions import ChangeFlowRunState, RunDeployment
 from prefect.events.schemas.automations import Automation, Posture
 from prefect.events.schemas.automations import EventTrigger as PrefectEventTrigger
 from prefect.events.schemas.events import ResourceSpecification
@@ -31,18 +32,24 @@ class TriggerComparison(StrEnum):
         return self in {TriggerComparison.REFRESH, TriggerComparison.UPDATE}
 
 
+# Forward reference for type alias - defined after all classes
+AnyTriggerDefinition = "TriggerDefinition | SystemTriggerDefinition"
+
+
 class TriggerSetupReport(BaseModel):
-    created: list[TriggerDefinition] = Field(default_factory=list)
-    refreshed: list[TriggerDefinition] = Field(default_factory=list)
-    updated: list[TriggerDefinition] = Field(default_factory=list)
+    created: list[TriggerDefinition | SystemTriggerDefinition] = Field(default_factory=list)
+    refreshed: list[TriggerDefinition | SystemTriggerDefinition] = Field(default_factory=list)
+    updated: list[TriggerDefinition | SystemTriggerDefinition] = Field(default_factory=list)
     deleted: list[Automation] = Field(default_factory=list)
-    unchanged: list[TriggerDefinition] = Field(default_factory=list)
+    unchanged: list[TriggerDefinition | SystemTriggerDefinition] = Field(default_factory=list)
 
     @property
     def in_use_count(self) -> int:
         return len(self.created + self.updated + self.unchanged + self.refreshed)
 
-    def add_with_comparison(self, trigger: TriggerDefinition, comparison: TriggerComparison) -> None:
+    def add_with_comparison(
+        self, trigger: TriggerDefinition | SystemTriggerDefinition, comparison: TriggerComparison
+    ) -> None:
         match comparison:
             case TriggerComparison.UPDATE:
                 self.updated.append(trigger)
@@ -146,6 +153,57 @@ class EventTrigger(BaseModel):
         return [ResourceSpecification(related_match) for related_match in self.match_related]
 
 
+class ProactiveEventTrigger(BaseModel):
+    """A proactive event trigger that fires when expected events do NOT occur within a time window.
+
+    Unlike EventTrigger which uses Reactive posture (fires when events occur),
+    ProactiveEventTrigger uses Proactive posture to detect missing events.
+    """
+
+    after: set[str] = Field(default_factory=set)
+    expect: set[str] = Field(default_factory=set)
+    match: dict[str, Any] = Field(default_factory=dict)
+    for_each: set[str] = Field(default_factory=set)
+    threshold: int = 1
+    within: timedelta = Field(default_factory=lambda: timedelta(seconds=90))
+
+    def get_prefect(self) -> PrefectEventTrigger:
+        return PrefectEventTrigger(
+            posture=Posture.Proactive,
+            after=self.after,
+            expect=self.expect,
+            match=ResourceSpecification(self.match),
+            for_each=self.for_each,
+            threshold=self.threshold,
+            within=self.within,
+        )
+
+
+class ChangeFlowRunStateAction(BaseModel):
+    """Action to change the state of a flow run.
+
+    Used for system automations that need to modify flow run states,
+    such as crashing zombie flows that have stopped sending heartbeats.
+    """
+
+    state: StateType
+    message: str = ""
+
+    def get_prefect(self, _mapping: dict[str, UUID] | None = None) -> ChangeFlowRunState:
+        """Get the Prefect ChangeFlowRunState action.
+
+        Args:
+            _mapping: Not used for this action type, but included for interface compatibility.
+
+        Returns:
+            A Prefect ChangeFlowRunState action.
+        """
+        return ChangeFlowRunState(  # type: ignore[call-arg]
+            state=self.state,
+            message=self.message,
+        )
+
+
 class ExecuteWorkflow(BaseModel):
     workflow: WorkflowDefinition
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -218,3 +276,34 @@ class TriggerBranchDefinition(TriggerDefinition):
 
 class BuiltinTriggerDefinition(TriggerDefinition):
     type: TriggerType = TriggerType.BUILTIN
+
+
+class SystemTriggerDefinition(BaseModel):
+    """A trigger definition for system-level Prefect automations.
+
+    Unlike TriggerDefinition which executes Infrahub workflows, SystemTriggerDefinition
+    is designed for Prefect system automations that don't require workflow deployments,
+    such as crashing zombie flows.
+    """
+
+    name: str
+    type: TriggerType = TriggerType.BUILTIN
+    description: str = ""
+    trigger: ProactiveEventTrigger | EventTrigger
+    actions: list[ChangeFlowRunStateAction]
+
+    def get_deployment_names(self) -> list[str]:
+        """Return empty list as system triggers don't use deployments."""
+        return []
+
+    def get_description(self) -> str:
+        return f"System Automation for {self.name} (v{__version__})"
+
+    def generate_name(self) -> str:
+        return f"{self.type.value}{NAME_SEPARATOR}{self.name}"
+
+    def validate_actions(self) -> None:
+        """Validate actions for system triggers.
+
+        System triggers use ChangeFlowRunStateAction which doesn't require parameter validation.
+        """
