@@ -12,6 +12,7 @@ from infrahub.core.node.resource_manager.number_pool import CoreNumberPool
 from infrahub.core.registry import registry
 from infrahub.core.schema import GenericSchema, NodeSchema, SchemaRoot
 from infrahub.core.schema.attribute_parameters import (
+    ListAttributeParameters,
     NumberAttributeParameters,
     NumberPoolParameters,
     TextAttributeParameters,
@@ -279,7 +280,7 @@ def test_list_attribute_with_regex_parameter() -> None:
 
     node = NodeSchema(**node_schema)
     protocols_attribute = node.get_attribute("protocols")
-    assert isinstance(protocols_attribute.parameters, TextAttributeParameters)
+    assert isinstance(protocols_attribute.parameters, ListAttributeParameters)
     assert protocols_attribute.parameters.regex == "ssh|ping|telnet"
     assert protocols_attribute.get_regex() == "ssh|ping|telnet"
 
@@ -302,7 +303,7 @@ def test_list_attribute_regex_reconciliation() -> None:
 
     node = NodeSchema(**node_schema)
     protocols_attribute = node.get_attribute("protocols")
-    assert isinstance(protocols_attribute.parameters, TextAttributeParameters)
+    assert isinstance(protocols_attribute.parameters, ListAttributeParameters)
     assert protocols_attribute.regex == "ssh|ping|telnet"
     assert protocols_attribute.parameters.regex == "ssh|ping|telnet"
 
