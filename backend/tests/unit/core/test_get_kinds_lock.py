@@ -1,15 +1,19 @@
 from copy import deepcopy
+from typing import Any
 from unittest.mock import patch
 
 from infrahub import lock
 from infrahub.core import registry
+from infrahub.core.constants import BranchSupportType
 from infrahub.core.constants.infrahubkind import GRAPHQLQUERY, GRAPHQLQUERYGROUP
 from infrahub.core.initialization import create_branch
 from infrahub.core.node.lock_utils import (
+    CARDINALITY_ONE_LOCK_NAMESPACE,
     _get_kinds_to_lock_on_object_mutation,
     _hash,
     get_lock_names_on_object_mutation,
 )
+from infrahub.core.schema import SchemaRoot
 from infrahub.database import InfrahubDatabase
 from tests.helpers.test_app import TestInfrahubApp
 from tests.node_creation import create_and_save
@@ -168,3 +172,139 @@ class TestGetKindsLock(TestInfrahubApp):
         assert get_lock_names_on_object_mutation(person, schema_branch=schema_branch) == [
             "global.object.TestPerson." + _hash("") + "." + _hash("John")
         ]
+
+    async def test_lock_names_cardinality_one_relationship(
+        self,
+        db: InfrahubDatabase,
+        default_branch,
+        client,
+        node_group_schema,
+        data_schema,
+    ) -> None:
+        """Test that we add locks for relationships where the peer has cardinality one."""
+        # Create a schema where:
+        # - Interface has a many relationship to IPAddress
+        # - IPAddress has a one relationship back to Interface (cardinality one constraint)
+        schema: dict[str, Any] = {
+            "nodes": [
+                {
+                    "name": "Interface",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "ip_address",
+                            "peer": "TestIPAddress",
+                            "cardinality": "many",
+                            "identifier": "interface__ip_address",
+                        },
+                    ],
+                },
+                {
+                    "name": "IPAddress",
+                    "namespace": "Test",
+                    "default_filter": "address__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "address", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "interface",
+                            "peer": "TestInterface",
+                            "cardinality": "one",
+                            "identifier": "interface__ip_address",
+                            "optional": True,
+                        },
+                    ],
+                },
+            ],
+        }
+        schema_root = SchemaRoot(**schema)
+        registry.schema.register_schema(schema=schema_root, branch=default_branch.name)
+        schema_branch = registry.schema.get_schema_branch(name=default_branch.name)
+
+        # Create an IP address
+        ip_address = await create_and_save(db=db, schema="TestIPAddress", address="10.0.0.1/24")
+
+        # Create an interface linked to that IP address
+        interface = await create_and_save(db=db, schema="TestInterface", name="eth0", ip_address=ip_address)
+
+        # The lock names should include the cardinality_one lock for the IP address
+        lock_names = get_lock_names_on_object_mutation(interface, schema_branch=schema_branch)
+
+        expected_lock = f"{CARDINALITY_ONE_LOCK_NAMESPACE}.interface__ip_address.{ip_address.id}"
+        assert expected_lock in lock_names
+
+    async def test_lock_names_direct_cardinality_one_relationship(
+        self,
+        db: InfrahubDatabase,
+        default_branch,
+        client,
+        node_group_schema,
+        data_schema,
+    ) -> None:
+        """Test that we add locks for direct cardinality one relationships on the node side."""
+        # Create a schema where:
+        # - Device has a cardinality one relationship to PrimaryInterface
+        # - PrimaryInterface has a many relationship back to Device
+        # This tests the case where the node being created has a cardinality one relationship
+        schema: dict[str, Any] = {
+            "nodes": [
+                {
+                    "name": "Device",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "primary_interface",
+                            "peer": "TestPrimaryInterface",
+                            "cardinality": "one",
+                            "identifier": "device__primary_interface",
+                            "optional": True,
+                        },
+                    ],
+                },
+                {
+                    "name": "PrimaryInterface",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "devices",
+                            "peer": "TestDevice",
+                            "cardinality": "many",
+                            "identifier": "device__primary_interface",
+                        },
+                    ],
+                },
+            ],
+        }
+        schema_root = SchemaRoot(**schema)
+        registry.schema.register_schema(schema=schema_root, branch=default_branch.name)
+        schema_branch = registry.schema.get_schema_branch(name=default_branch.name)
+
+        # Create a primary interface
+        primary_interface = await create_and_save(db=db, schema="TestPrimaryInterface", name="eth0")
+
+        # Create a device linked to that primary interface
+        device = await create_and_save(db=db, schema="TestDevice", name="router1", primary_interface=primary_interface)
+
+        # The lock names should include the cardinality_one lock for the device's node ID
+        # (not the peer's ID, since we're locking on the node's cardinality one relationship)
+        lock_names = get_lock_names_on_object_mutation(device, schema_branch=schema_branch)
+
+        expected_lock = f"{CARDINALITY_ONE_LOCK_NAMESPACE}.device__primary_interface.{device.id}"
+        assert expected_lock in lock_names
