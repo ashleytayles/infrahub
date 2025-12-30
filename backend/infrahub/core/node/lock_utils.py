@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 RESOURCE_POOL_LOCK_NAMESPACE = "resource_pool"
-CARDINALITY_ONE_LOCK_NAMESPACE = "cardinality_one"
+RELATIONSHIP_COUNT_LOCK_NAMESPACE = "relationship_count"
 
 
 def _get_kinds_to_lock_on_object_mutation(kind: str, schema_branch: SchemaBranch) -> list[str]:
@@ -80,17 +80,19 @@ def get_lock_names_on_object_mutation(node: Node, schema_branch: SchemaBranch) -
             if not peer_id or not rel.schema.identifier:
                 continue
 
-            # Check if this node's relationship has cardinality one
-            # This prevents concurrent updates to the same node's cardinality one relationship
-            if rel.schema.cardinality == RelationshipCardinality.ONE:
-                lock_names.add(f"{CARDINALITY_ONE_LOCK_NAMESPACE}.{rel.schema.identifier}.{node.id}")
+            # Check if this node's relationship has cardinality one or max/min_count constraint
+            # This prevents concurrent updates to the same node's constrained relationship
+            if rel.schema.cardinality == RelationshipCardinality.ONE or rel.schema.max_count or rel.schema.min_count:
+                lock_names.add(f"{RELATIONSHIP_COUNT_LOCK_NAMESPACE}.{rel.schema.identifier}.{node.id}")
 
-            # Check if the peer has a cardinality one constraint on the reverse relationship
-            # This is an implicit uniqueness constraint that we need to lock on
+            # Check if the peer has count constraints on the reverse relationship
+            # This includes cardinality one, max_count, and min_count constraints
             peer_schema = schema_branch.get(name=rel.schema.peer, duplicate=False)
             peer_rel = peer_schema.get_relationship_by_identifier(id=rel.schema.identifier, raise_on_error=False)
-            if peer_rel and peer_rel.cardinality == RelationshipCardinality.ONE:
-                lock_names.add(f"{CARDINALITY_ONE_LOCK_NAMESPACE}.{rel.schema.identifier}.{peer_id}")
+            if peer_rel and (
+                peer_rel.cardinality == RelationshipCardinality.ONE or peer_rel.max_count or peer_rel.min_count
+            ):
+                lock_names.add(f"{RELATIONSHIP_COUNT_LOCK_NAMESPACE}.{rel.schema.identifier}.{peer_id}")
 
     lock_kinds = _get_kinds_to_lock_on_object_mutation(node.get_kind(), schema_branch)
     for kind in lock_kinds:

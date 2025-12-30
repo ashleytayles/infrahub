@@ -8,7 +8,7 @@ from infrahub.core.constants import BranchSupportType
 from infrahub.core.constants.infrahubkind import GRAPHQLQUERY, GRAPHQLQUERYGROUP
 from infrahub.core.initialization import create_branch
 from infrahub.core.node.lock_utils import (
-    CARDINALITY_ONE_LOCK_NAMESPACE,
+    RELATIONSHIP_COUNT_LOCK_NAMESPACE,
     _get_kinds_to_lock_on_object_mutation,
     _hash,
     get_lock_names_on_object_mutation,
@@ -234,10 +234,10 @@ class TestGetKindsLock(TestInfrahubApp):
         # Create an interface linked to that IP address
         interface = await create_and_save(db=db, schema="TestInterface", name="eth0", ip_address=ip_address)
 
-        # The lock names should include the cardinality_one lock for the IP address
+        # The lock names should include the relationship_count lock for the IP address
         lock_names = get_lock_names_on_object_mutation(interface, schema_branch=schema_branch)
 
-        expected_lock = f"{CARDINALITY_ONE_LOCK_NAMESPACE}.interface__ip_address.{ip_address.id}"
+        expected_lock = f"{RELATIONSHIP_COUNT_LOCK_NAMESPACE}.interface__ip_address.{ip_address.id}"
         assert expected_lock in lock_names
 
     async def test_lock_names_direct_cardinality_one_relationship(
@@ -302,9 +302,214 @@ class TestGetKindsLock(TestInfrahubApp):
         # Create a device linked to that primary interface
         device = await create_and_save(db=db, schema="TestDevice", name="router1", primary_interface=primary_interface)
 
-        # The lock names should include the cardinality_one lock for the device's node ID
+        # The lock names should include the relationship_count lock for the device's node ID
         # (not the peer's ID, since we're locking on the node's cardinality one relationship)
         lock_names = get_lock_names_on_object_mutation(device, schema_branch=schema_branch)
 
-        expected_lock = f"{CARDINALITY_ONE_LOCK_NAMESPACE}.device__primary_interface.{device.id}"
+        expected_lock = f"{RELATIONSHIP_COUNT_LOCK_NAMESPACE}.device__primary_interface.{device.id}"
+        assert expected_lock in lock_names
+
+    async def test_lock_names_max_count_relationship(
+        self,
+        db: InfrahubDatabase,
+        default_branch,
+        client,
+        node_group_schema,
+        data_schema,
+    ) -> None:
+        """Test that we add locks for relationships where the peer has max_count constraint."""
+        # Create a schema where:
+        # - Team has a many relationship to Player
+        # - Player has a many relationship back to Team with max_count=5
+        # This tests the case where the peer limits how many nodes can link to it
+        schema: dict[str, Any] = {
+            "nodes": [
+                {
+                    "name": "Team",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "players",
+                            "peer": "TestPlayer",
+                            "cardinality": "many",
+                            "identifier": "team__player",
+                        },
+                    ],
+                },
+                {
+                    "name": "Player",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "teams",
+                            "peer": "TestTeam",
+                            "cardinality": "many",
+                            "identifier": "team__player",
+                            "max_count": 3,
+                        },
+                    ],
+                },
+            ],
+        }
+        schema_root = SchemaRoot(**schema)
+        registry.schema.register_schema(schema=schema_root, branch=default_branch.name)
+        schema_branch = registry.schema.get_schema_branch(name=default_branch.name)
+
+        # Create a player
+        player = await create_and_save(db=db, schema="TestPlayer", name="John")
+
+        # Create a team linked to that player
+        team = await create_and_save(db=db, schema="TestTeam", name="Red Team", players=player)
+
+        # The lock names should include the relationship_count lock for the player's ID
+        lock_names = get_lock_names_on_object_mutation(team, schema_branch=schema_branch)
+
+        expected_lock = f"{RELATIONSHIP_COUNT_LOCK_NAMESPACE}.team__player.{player.id}"
+        assert expected_lock in lock_names
+
+    async def test_lock_names_min_count_relationship(
+        self,
+        db: InfrahubDatabase,
+        default_branch,
+        client,
+        node_group_schema,
+        data_schema,
+    ) -> None:
+        """Test that we add locks for relationships where the peer has min_count constraint."""
+        # Create a schema where:
+        # - Department has a many relationship to Employee
+        # - Employee has a many relationship back to Department with min_count=1
+        # This tests the case where the peer requires a minimum number of links
+        schema: dict[str, Any] = {
+            "nodes": [
+                {
+                    "name": "Department",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "employees",
+                            "peer": "TestEmployee",
+                            "cardinality": "many",
+                            "identifier": "department__employee",
+                        },
+                    ],
+                },
+                {
+                    "name": "Employee",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "departments",
+                            "peer": "TestDepartment",
+                            "cardinality": "many",
+                            "identifier": "department__employee",
+                            "min_count": 1,
+                        },
+                    ],
+                },
+            ],
+        }
+        schema_root = SchemaRoot(**schema)
+        registry.schema.register_schema(schema=schema_root, branch=default_branch.name)
+        schema_branch = registry.schema.get_schema_branch(name=default_branch.name)
+
+        # Create an employee
+        employee = await create_and_save(db=db, schema="TestEmployee", name="Alice")
+
+        # Create a department linked to that employee
+        department = await create_and_save(db=db, schema="TestDepartment", name="Engineering", employees=employee)
+
+        # The lock names should include the relationship_count lock for the employee's ID
+        lock_names = get_lock_names_on_object_mutation(department, schema_branch=schema_branch)
+
+        expected_lock = f"{RELATIONSHIP_COUNT_LOCK_NAMESPACE}.department__employee.{employee.id}"
+        assert expected_lock in lock_names
+
+    async def test_lock_names_direct_min_count_relationship(
+        self,
+        db: InfrahubDatabase,
+        default_branch,
+        client,
+        node_group_schema,
+        data_schema,
+    ) -> None:
+        """Test that we add locks for direct min_count relationships on the node side."""
+        # Create a schema where:
+        # - Project has a many relationship to Member with min_count=2
+        # - Member has a many relationship back to Project
+        # This tests the case where the node being created has a min_count constraint
+        schema: dict[str, Any] = {
+            "nodes": [
+                {
+                    "name": "Project",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "members",
+                            "peer": "TestMember",
+                            "cardinality": "many",
+                            "identifier": "project__member",
+                            "min_count": 2,
+                        },
+                    ],
+                },
+                {
+                    "name": "Member",
+                    "namespace": "Test",
+                    "default_filter": "name__value",
+                    "branch": BranchSupportType.AWARE.value,
+                    "attributes": [
+                        {"name": "name", "kind": "Text"},
+                    ],
+                    "relationships": [
+                        {
+                            "name": "projects",
+                            "peer": "TestProject",
+                            "cardinality": "many",
+                            "identifier": "project__member",
+                        },
+                    ],
+                },
+            ],
+        }
+        schema_root = SchemaRoot(**schema)
+        registry.schema.register_schema(schema=schema_root, branch=default_branch.name)
+        schema_branch = registry.schema.get_schema_branch(name=default_branch.name)
+
+        # Create members
+        member1 = await create_and_save(db=db, schema="TestMember", name="Bob")
+        member2 = await create_and_save(db=db, schema="TestMember", name="Carol")
+
+        # Create a project linked to members
+        project = await create_and_save(db=db, schema="TestProject", name="Alpha", members=[member1, member2])
+
+        # The lock names should include the relationship_count lock for the project's node ID
+        lock_names = get_lock_names_on_object_mutation(project, schema_branch=schema_branch)
+
+        expected_lock = f"{RELATIONSHIP_COUNT_LOCK_NAMESPACE}.project__member.{project.id}"
         assert expected_lock in lock_names
