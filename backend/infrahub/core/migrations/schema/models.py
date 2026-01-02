@@ -6,6 +6,7 @@ from infrahub.core.branch import Branch
 from infrahub.core.models import SchemaUpdateMigrationInfo
 from infrahub.core.path import SchemaPath
 from infrahub.core.schema.schema_branch import SchemaBranch
+from infrahub.core.timestamp import Timestamp
 
 
 class SchemaApplyMigrationData(BaseModel):
@@ -15,6 +16,7 @@ class SchemaApplyMigrationData(BaseModel):
     new_schema: SchemaBranch
     previous_schema: SchemaBranch
     migrations: list[SchemaUpdateMigrationInfo]
+    at: Timestamp
 
     @model_serializer()
     def serialize_model(self) -> dict[str, Any]:
@@ -23,6 +25,7 @@ class SchemaApplyMigrationData(BaseModel):
             "previous_schema": self.previous_schema.to_dict_schema_object(),
             "new_schema": self.new_schema.to_dict_schema_object(),
             "migrations": [migration.model_dump() for migration in self.migrations],
+            "at": self.at.to_string(),
         }
 
     @field_validator("new_schema", "previous_schema", mode="before")

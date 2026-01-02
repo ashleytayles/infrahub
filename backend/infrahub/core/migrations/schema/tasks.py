@@ -10,6 +10,7 @@ from prefect.logging import get_run_logger
 from infrahub.core.branch import Branch  # noqa: TC001
 from infrahub.core.migrations import MIGRATION_MAP
 from infrahub.core.path import SchemaPath  # noqa: TC001
+from infrahub.core.timestamp import Timestamp
 from infrahub.workers.dependencies import get_database
 from infrahub.workflows.utils import add_branch_tag
 
@@ -57,6 +58,7 @@ async def schema_apply_migrations(message: SchemaApplyMigrationData) -> list[str
             previous_node_schema=previous_node_schema,
             schema_path=migration.path,
             database=await get_database(),
+            at=Timestamp(message.at),
         )
 
     async for _, result in batch.execute():
@@ -77,6 +79,7 @@ async def schema_path_migrate(
     migration_name: str,
     schema_path: SchemaPath,
     database: InfrahubDatabase,
+    at: Timestamp,
     new_node_schema: MainSchemaTypes | None = None,
     previous_node_schema: MainSchemaTypes | None = None,
 ) -> SchemaMigrationPathResponseData:
@@ -101,7 +104,7 @@ async def schema_path_migrate(
             previous_node_schema=previous_node_schema,  # type: ignore[arg-type]
             schema_path=schema_path,
         )
-        execution_result = await migration.execute(db=db, branch=branch)
+        execution_result = await migration.execute(db=db, branch=branch, at=at)
 
         log.info(f"Migration completed for {migration_name}")
         log.debug(f"execution_result {execution_result}")

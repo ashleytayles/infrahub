@@ -1077,6 +1077,7 @@ class RelationshipManager:
         data: list[str | Node] | dict[str, Any] | str | Node | None,
         db: InfrahubDatabase,
         process_delete: bool = True,
+        at: Timestamp | None = None,
     ) -> bool:
         """Replace and Update the list of relationships with this one."""
         if not isinstance(data, list):
@@ -1085,6 +1086,9 @@ class RelationshipManager:
             list_data = data
 
         await self._validate_hierarchy()
+
+        # Use provided timestamp or fall back to instance timestamp
+        update_at = Timestamp(at)
 
         # Reset the list of relationship and save the previous one to see if we can reuse some
         previous_relationships = {rel.peer_id: rel for rel in await self.get_relationships(db=db) if rel.peer_id}
@@ -1105,7 +1109,7 @@ class RelationshipManager:
                 if previous_relationships:
                     if process_delete:
                         for rel in previous_relationships.values():
-                            await rel.delete(db=db)
+                            await rel.delete(db=db, at=update_at)
                     changed = True
                 continue
 
@@ -1124,7 +1128,7 @@ class RelationshipManager:
 
             # If the item is not present in the previous list of relationship, we create a new one.
             self._relationships.append(
-                await self.rel_class(schema=self.schema, branch=self.branch, at=self.at, node=self.node).new(
+                await self.rel_class(schema=self.schema, branch=self.branch, at=update_at, node=self.node).new(
                     db=db, data=item
                 )
             )
