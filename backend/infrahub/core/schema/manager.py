@@ -241,7 +241,9 @@ class SchemaManager(NodeManager):
         for item_kind, item_diff in diff.changed.items():
             item = schema.get(name=item_kind, duplicate=False)
             if item_diff:
-                node = await self.update_node_in_db_based_on_diff(node=item, branch=branch, db=db, diff=item_diff, at=at)
+                node = await self.update_node_in_db_based_on_diff(
+                    node=item, branch=branch, db=db, diff=item_diff, at=at
+                )
             else:
                 node = await self.update_node_in_db(node=item, branch=branch, db=db, at=at)
             schema.set(name=item_kind, schema=node)
@@ -604,9 +606,7 @@ class SchemaManager(NodeManager):
         return new_item
 
     @staticmethod
-    async def update_attribute_in_db(
-        item: AttributeSchema, attr: Node, db: InfrahubDatabase, at: Timestamp
-    ) -> None:
+    async def update_attribute_in_db(item: AttributeSchema, attr: Node, db: InfrahubDatabase, at: Timestamp) -> None:
         item_dict = item.model_dump(exclude={"id", "state", "filters"})
         for key, value in item_dict.items():
             getattr(attr, key).value = value

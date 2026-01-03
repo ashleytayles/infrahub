@@ -19,6 +19,7 @@ from infrahub.log import get_logger
 from infrahub.types import Number
 
 if TYPE_CHECKING:
+    from infrahub.core.timestamp import Timestamp
     from infrahub.database import InfrahubDatabase
 
 log = get_logger()
@@ -35,7 +36,7 @@ class Migration031(InternalSchemaMigration):
     minimum_version: int = 30
     migrations: Sequence[SchemaMigration] = []
 
-    async def execute(self, db: InfrahubDatabase) -> MigrationResult:
+    async def execute(self, db: InfrahubDatabase, at: Timestamp) -> MigrationResult:  # noqa: ARG002
         """Retrieve all number attributes that have a min/max/excluded_values
         For any of these attributes, check if corresponding existing nodes are valid."""
 

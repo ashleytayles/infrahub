@@ -11,6 +11,7 @@ from infrahub.log import get_logger
 from ..shared import InternalSchemaMigration, SchemaMigration
 
 if TYPE_CHECKING:
+    from infrahub.core.timestamp import Timestamp
     from infrahub.database import InfrahubDatabase
 
 log = get_logger()
@@ -26,7 +27,7 @@ class Migration017(InternalSchemaMigration):
 
         return result
 
-    async def execute(self, db: InfrahubDatabase) -> MigrationResult:
+    async def execute(self, db: InfrahubDatabase, at: Timestamp) -> MigrationResult:
         """
         Load CoreProfile schema node in db.
         """
@@ -35,6 +36,6 @@ class Migration017(InternalSchemaMigration):
         manager.set_schema_branch(name=default_branch.name, schema=self.get_internal_schema())
 
         db.add_schema(manager.get_schema_branch(default_branch.name))
-        await manager.load_node_to_db(node=core_profile_schema_definition, db=db, branch=default_branch)
+        await manager.load_node_to_db(node=core_profile_schema_definition, db=db, branch=default_branch, at=at)
 
         return MigrationResult()

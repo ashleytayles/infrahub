@@ -63,7 +63,7 @@ class NodeAttributeAddMigration(AttributeSchemaMigration):
         self,
         db: InfrahubDatabase,
         branch: Branch,
-        at: Timestamp | str | None = None,
+        at: Timestamp,
         queries: Sequence[type[MigrationBaseQuery]] | None = None,
     ) -> MigrationResult:
         if self.new_attribute_schema.inherited is True:

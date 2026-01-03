@@ -151,7 +151,7 @@ class AttributeKindUpdateMigration(AttributeSchemaMigration):
         self,
         db: InfrahubDatabase,
         branch: Branch,
-        at: Timestamp | str | None = None,
+        at: Timestamp,
         queries: Sequence[type[MigrationBaseQuery]] | None = None,
     ) -> MigrationResult:
         is_indexed_previous = is_large_attribute_type(self.previous_attribute_schema.kind)

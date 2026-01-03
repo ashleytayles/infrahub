@@ -9,6 +9,7 @@ from ..shared import InternalSchemaMigration, SchemaMigration
 from .m018_uniqueness_nulls import validate_nulls_in_uniqueness_constraints
 
 if TYPE_CHECKING:
+    from infrahub.core.timestamp import Timestamp
     from infrahub.database import InfrahubDatabase
 
 log = get_logger()
@@ -22,5 +23,5 @@ class Migration025(InternalSchemaMigration):
     async def validate_migration(self, db: InfrahubDatabase) -> MigrationResult:  # noqa: ARG002
         return MigrationResult()
 
-    async def execute(self, db: InfrahubDatabase) -> MigrationResult:
+    async def execute(self, db: InfrahubDatabase, at: Timestamp) -> MigrationResult:  # noqa: ARG002
         return await validate_nulls_in_uniqueness_constraints(db=db)
